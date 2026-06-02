@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip3 --version)",
+      "Bash(python3 -c \"import flask; print\\('Flask', flask.__version__\\)\")",
+      "Bash(python3 -c \"import flask_cors; print\\('flask-cors OK'\\)\")",
+      "Bash(python3 -c \"import cx_Oracle; print\\('cx_Oracle', cx_Oracle.version\\)\")",
+      "Bash(python3 -c \"import dotenv; print\\('python-dotenv OK'\\)\")",
+      "Bash(python3 -c \"import sys; v=sys.version_info; print\\(f'Python {v.major}.{v.minor}.{v.micro}'\\); exit\\(0 if \\(v.major,v.minor\\)>=\\(3,10\\) else 1\\)\")",
+      "Bash(pyenv versions *)",
+      "Bash(conda --version)",
+      "Bash(brew --version)"
+    ]
+  }
+}

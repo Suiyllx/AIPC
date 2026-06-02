@@ -1,0 +1,160 @@
+from flask import Flask, jsonify
+from flask_cors import CORS
+import cx_Oracle
+
+app = Flask(__name__)
+CORS(app)  # 跨域已开启
+
+# Oracle 连接信息
+ORACLE_CONFIG = {
+    "host": "172.19.187.61",
+    "port": "1521",
+    "service_name": "ORCL",
+    "user": "system",
+    "password": "4321"
+}
+
+# ------------------- 工具函数 -------------------
+def mask_name(name):
+    """姓名脱敏：张三 → 张*"""
+    if not name or len(name) <= 1:
+        return name
+    return name[0] + "*"
+
+def mask_phone(phone):
+    """手机号脱敏：13812345678 → 138****5678"""
+    if not phone or len(phone) != 11:
+        return phone or ""
+    return phone[:3] + "****" + phone[-4:]
+
+def get_asset_level(asset):
+    """资产分级：0-10w低，10-50w中，50w+高"""
+    asset = float(asset) if asset else 0
+    if asset < 10:
+        return "低价值客户"
+    elif asset < 50:
+        return "中等价值客户"
+    else:
+        return "高价值客户"
+
+def get_risk_level_text(level):
+    """风险等级数字转中文"""
+    mapping = {
+        4: "保守型",
+        5: "谨慎型",
+        6: "稳健型",
+        7: "积极型",
+        8: "激进型"
+    }
+    return mapping.get(int(level), "未知") if level else "未知"
+
+# ------------------- 核心数据查询 -------------------
+def get_customer_data():
+    dsn = cx_Oracle.makedsn(
+        ORACLE_CONFIG["host"],
+        ORACLE_CONFIG["port"],
+        service_name=ORACLE_CONFIG["service_name"]
+    )
+    conn = cx_Oracle.connect(
+        user=ORACLE_CONFIG["user"],
+        password=ORACLE_CONFIG["password"],
+        dsn=dsn
+    )
+    cursor = conn.cursor()
+
+    # 1. 绑定状态表（已改为：CLIENT_ID）
+    bind_set = set()
+    try:
+        cursor.execute("SELECT CLIENT_ID FROM S01_PROD.T_S01_EHT_CIM_T_EHT_ACCOU_BIND")
+        for row in cursor.fetchall():
+            if row[0]:
+                bind_set.add(str(row[0]).strip())
+    except:
+        pass
+
+    # 2. 客户最新净资产：取 BIZ_DT 最新的 CUST_TOT_NET_AST
+    asset_map = {}
+    try:
+        sql_asset = """
+            SELECT CUST_NO, CUST_TOT_NET_AST
+            FROM (
+                SELECT CUST_NO, CUST_TOT_NET_AST,
+                ROW_NUMBER() OVER(PARTITION BY CUST_NO ORDER BY BIZ_DT DESC) rn
+                FROM DDW_PROD.T_DDW_F00_C_D_END_AST_AGGR
+            )
+            WHERE rn = 1
+        """
+        cursor.execute(sql_asset)
+        for cust_no, net_ast in cursor.fetchall():
+            asset_map[str(cust_no).strip()] = net_ast
+    except:
+        pass
+
+    # 3. 客户最新风险等级：取 corp_end_date 最大的一条
+    risk_map = {}
+    try:
+        sql_risk = """
+            SELECT CLIENT_ID, corp_risk_level
+            FROM (
+                SELECT CLIENT_ID, corp_risk_level,
+                ROW_NUMBER() OVER(PARTITION BY CLIENT_ID ORDER BY corp_end_date DESC) rn
+                FROM hs_asset.clientprefer
+            )
+            WHERE rn = 1
+        """
+        cursor.execute(sql_risk)
+        for client_id, risk_level in cursor.fetchall():
+            risk_map[str(client_id).strip()] = risk_level
+    except:
+        pass
+
+    # 4. 主表：custgroup.t_client_info，取 BRANCH_NO=291
+    cursor.execute("""
+        SELECT CLIENT_ID, USER_NM, MOBILE
+        FROM custgroup.t_client_info
+        WHERE BRANCH_NO = '291'
+    """)
+    main_rows = cursor.fetchall()
+
+    # 组装最终结果
+    result = []
+    for client_id, user_nm, mobile in main_rows:
+        key = str(client_id).strip()
+
+        # 净资产
+        net_ast = asset_map.get(key, 0)
+        # 资产等级
+        asset_level = get_asset_level(net_ast)
+        # 风险等级
+        risk_level = risk_map.get(key)
+        risk_text = get_risk_level_text(risk_level)
+        # 建联状态（已改为匹配 CLIENT_ID）
+        contact_status = "已绑定&已认证" if key in bind_set else "未绑定或未认证"
+
+        result.append({
+            "fund_account": client_id,            # 资金账号
+            "cust_name": mask_name(user_nm),      # 姓名（脱敏）
+            "phone": mask_phone(mobile),          # 手机号（脱敏）
+            "t1_aum": round(float(net_ast), 2) if net_ast else 0.00,  # 最新净资产
+            "asset_level": asset_level,           # 资产等级
+            "risk_level": risk_text,              # 风险等级
+            "contact_status": contact_status      # 建联状态
+        })
+
+    cursor.close()
+    conn.close()
+    return result
+
+# ------------------- 对外接口 -------------------
+@app.route("/api/customer/asset/list")
+def customer_list():
+    data = get_customer_data()
+    return jsonify({
+        "code": 200,
+        "msg": "success",
+        "data": data
+    })
+
+# ------------------- 启动服务 -------------------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)

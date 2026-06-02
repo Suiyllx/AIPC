@@ -1,0 +1,33 @@
+# 敏感配置 - 绝对不要提交
+.env
+*.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# 日志
+*.log
+logs/
+
+# Node（前端）
+node_modules/
+.npm/
